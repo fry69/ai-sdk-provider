@@ -60,4 +60,138 @@ describe('Optional properties in JSON schema', () => {
       expect(jsonSchema.required).toContain('gender');
     }
   });
+
+  it('should handle schemas with no required array initially', () => {
+    const testSchema = {
+      type: 'object',
+      properties: {
+        title: { type: 'string' },
+        description: { type: 'string' },
+      },
+      // No required array - all properties are optional
+      additionalProperties: false,
+    };
+
+    // @ts-ignore - accessing private method for testing
+    const args = model.getArgs({
+      prompt: [{ role: 'user', content: [{ type: 'text', text: 'Generate content' }] }],
+      responseFormat: {
+        type: 'json',
+        schema: testSchema,
+        name: 'response',
+      },
+    });
+
+    const jsonSchema = args.response_format.json_schema.schema;
+    expect(jsonSchema.required).toEqual(['title', 'description']);
+  });
+
+  it('should handle nested object schemas', () => {
+    const testSchema = {
+      type: 'object',
+      properties: {
+        user: {
+          type: 'object',
+          properties: {
+            name: { type: 'string' },
+            email: { type: 'string' },
+          },
+          required: ['name'], // email is optional
+        },
+        metadata: {
+          type: 'object',
+          properties: {
+            created: { type: 'string' },
+            updated: { type: 'string' },
+          },
+          // No required array
+        },
+      },
+      required: ['user'], // metadata is optional
+      additionalProperties: false,
+    };
+
+    // @ts-ignore - accessing private method for testing
+    const args = model.getArgs({
+      prompt: [{ role: 'user', content: [{ type: 'text', text: 'Generate user data' }] }],
+      responseFormat: {
+        type: 'json',
+        schema: testSchema,
+        name: 'response',
+      },
+    });
+
+    const jsonSchema = args.response_format.json_schema.schema;
+    
+    // Root level should have all properties required
+    expect(jsonSchema.required).toEqual(['user', 'metadata']);
+    
+    // Nested objects should also have all their properties required
+    expect(jsonSchema.properties.user.required).toEqual(['name', 'email']);
+    expect(jsonSchema.properties.metadata.required).toEqual(['created', 'updated']);
+  });
+
+  it('should preserve schemas that are already fully required', () => {
+    const fullyRequiredSchema = {
+      type: 'object',
+      properties: {
+        id: { type: 'string' },
+        name: { type: 'string' },
+        email: { type: 'string' },
+      },
+      required: ['id', 'name', 'email'], // All properties already required
+      additionalProperties: false,
+    };
+
+    // @ts-ignore - accessing private method for testing
+    const args = model.getArgs({
+      prompt: [{ role: 'user', content: [{ type: 'text', text: 'Generate user' }] }],
+      responseFormat: {
+        type: 'json',
+        schema: fullyRequiredSchema,
+        name: 'response',
+      },
+    });
+
+    const jsonSchema = args.response_format.json_schema.schema;
+    expect(jsonSchema.required).toEqual(['id', 'name', 'email']);
+  });
+
+  it('should not modify schema when compatibility is not strict', () => {
+    const compatibleModel = new OpenRouterChatLanguageModel(
+      'openai/gpt-4-mini',
+      {},
+      {
+        provider: 'openrouter',
+        compatibility: 'compatible', // Not strict
+        headers: () => ({}),
+        url: () => 'https://openrouter.ai/api/v1/chat/completions',
+      }
+    );
+
+    const testSchema = {
+      type: 'object',
+      properties: {
+        name: { type: 'string' },
+        age: { type: 'number' },
+        gender: { type: 'string' },
+      },
+      required: ['name', 'age'], // gender is optional
+      additionalProperties: false,
+    };
+
+    // @ts-ignore - accessing private method for testing
+    const args = compatibleModel.getArgs({
+      prompt: [{ role: 'user', content: [{ type: 'text', text: 'Generate user' }] }],
+      responseFormat: {
+        type: 'json',
+        schema: testSchema,
+        name: 'response',
+      },
+    });
+
+    const jsonSchema = args.response_format.json_schema.schema;
+    // Should preserve original required array since compatibility is not strict
+    expect(jsonSchema.required).toEqual(['name', 'age']);
+  });
 });
