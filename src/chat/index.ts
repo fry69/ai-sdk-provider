@@ -74,6 +74,62 @@ export class OpenRouterChatLanguageModel implements LanguageModelV2 {
     this.config = config;
   }
 
+  /**
+   * Processes a JSON schema to ensure compatibility with OpenAI's strict mode.
+   * In strict mode, all properties defined in the schema must be in the required array.
+   * This method adds all properties to the required array to prevent API errors.
+   */
+  private processSchemaForStrictMode(schema: Record<string, unknown>): Record<string, unknown> {
+    if (!schema || typeof schema !== 'object') {
+      return schema;
+    }
+
+    // Deep clone the schema to avoid modifying the original
+    const processedSchema = JSON.parse(JSON.stringify(schema));
+
+    // If this is an object schema with properties, ensure all properties are required
+    if (processedSchema.type === 'object' && processedSchema.properties) {
+      const allPropertyNames = Object.keys(processedSchema.properties);
+      
+      // Merge existing required properties with all property names
+      const existingRequired = Array.isArray(processedSchema.required) ? processedSchema.required : [];
+      const allRequired = [...new Set([...existingRequired, ...allPropertyNames])];
+      
+      processedSchema.required = allRequired;
+    }
+
+    // Recursively process nested schemas
+    if (processedSchema.properties) {
+      for (const key in processedSchema.properties) {
+        processedSchema.properties[key] = this.processSchemaForStrictMode(processedSchema.properties[key] as Record<string, unknown>);
+      }
+    }
+
+    // Handle arrays of items
+    if (processedSchema.items) {
+      processedSchema.items = this.processSchemaForStrictMode(processedSchema.items as Record<string, unknown>);
+    }
+
+    // Handle oneOf, anyOf, allOf arrays
+    if (Array.isArray(processedSchema.oneOf)) {
+      processedSchema.oneOf = processedSchema.oneOf.map((subSchema: Record<string, unknown>) => 
+        this.processSchemaForStrictMode(subSchema)
+      );
+    }
+    if (Array.isArray(processedSchema.anyOf)) {
+      processedSchema.anyOf = processedSchema.anyOf.map((subSchema: Record<string, unknown>) => 
+        this.processSchemaForStrictMode(subSchema)
+      );
+    }
+    if (Array.isArray(processedSchema.allOf)) {
+      processedSchema.allOf = processedSchema.allOf.map((subSchema: Record<string, unknown>) => 
+        this.processSchemaForStrictMode(subSchema)
+      );
+    }
+
+    return processedSchema;
+  }
+
   private getArgs({
     prompt,
     maxOutputTokens,
@@ -143,12 +199,19 @@ export class OpenRouterChatLanguageModel implements LanguageModelV2 {
     };
 
     if (responseFormat?.type === 'json' && responseFormat.schema != null) {
+      // Fix for issue #152: OpenAI's strict mode requires all properties to be in the required array
+      // If a property exists in the schema but not in required, it causes an error
+      // Only process the schema for strict mode when using strict compatibility
+      const processedSchema = this.config.compatibility === 'strict' 
+        ? this.processSchemaForStrictMode(responseFormat.schema)
+        : responseFormat.schema;
+      
       return {
         ...baseArgs,
         response_format: {
           type: 'json_schema',
           json_schema: {
-            schema: responseFormat.schema,
+            schema: processedSchema,
             strict: true,
             name: responseFormat.name ?? 'response',
             ...(responseFormat.description && {
