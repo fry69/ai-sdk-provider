@@ -143,13 +143,38 @@ export class OpenRouterChatLanguageModel implements LanguageModelV2 {
     };
 
     if (responseFormat?.type === 'json' && responseFormat.schema != null) {
+      // OpenAI (and thus OpenRouter passthrough) currently rejects json_schema\n+      // definitions for response_format when `strict: true` is set AND the\n+      // `required` array does not list every property key (i.e. optional\n+      // properties). The upstream error message:\n+      //   "Invalid schema for response_format '...': ... Missing 'foo'."\n+      // We were previously always setting `strict: true`, which causes\n+      // schemas containing optional properties (not present in `required`) to\n+      // be rejected with a 400.\n+      //\n+      // To improve developer experience we detect this situation and only set\n+      // `strict: true` when all properties are required. Otherwise we omit the\n+      // strict flag (defaulting to the provider's non-strict behaviour) so\n+      // optional fields are allowed. This mirrors how the Vercel AI SDK passes\n+      // optional fields for other providers.\n+      //\n+      // If future upstream behaviour changes (e.g. optional fields become\n+      // supported in strict mode) this logic can be revisited.
+      let strict: boolean | undefined = true;
+      try {
+        const schema: any = responseFormat.schema;
+        if (
+          schema &&
+          typeof schema === 'object' &&
+          schema.properties &&
+          typeof schema.properties === 'object'
+        ) {
+          const propertyKeys = Object.keys(schema.properties);
+          const required: string[] = Array.isArray(schema.required)
+            ? schema.required
+            : [];
+            // If not every property is listed in required, treat schema as having optional properties.
+          const hasOptional = propertyKeys.some(
+            (k) => !required.includes(k),
+          );
+          if (hasOptional) {
+            strict = undefined; // omit strict to avoid upstream validation error
+          }
+        }
+      } catch {
+        // Swallow any defensive parsing errors; keep strict true.
+      }
       return {
         ...baseArgs,
         response_format: {
           type: 'json_schema',
           json_schema: {
             schema: responseFormat.schema,
-            strict: true,
+            ...(strict !== undefined && { strict }),
             name: responseFormat.name ?? 'response',
             ...(responseFormat.description && {
               description: responseFormat.description,

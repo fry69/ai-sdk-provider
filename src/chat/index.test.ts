@@ -579,6 +579,44 @@ describe('doGenerate', () => {
       },
     });
   });
+
+  it('should omit strict flag when schema contains optional properties to avoid upstream rejection', async () => {
+    prepareJsonResponse({ content: '{"name": "John", "age": 30, "gender": "male"}' });
+
+    // Simulate a schema where 'gender' is optional (not listed in required)
+    const testSchemaWithOptional = {
+      type: 'object',
+      properties: {
+        name: { type: 'string' },
+        age: { type: 'number' },
+        gender: { type: 'string' },
+      },
+      required: ['name', 'age'],
+      additionalProperties: false,
+    };
+
+    await model.doGenerate({
+      prompt: TEST_PROMPT,
+      responseFormat: {
+        type: 'json',
+        schema: testSchemaWithOptional,
+        name: 'PersonResponse',
+      },
+    });
+
+    expect(await server.calls[0]!.requestBodyJson).toStrictEqual({
+      model: 'anthropic/claude-3.5-sonnet',
+      messages: [{ role: 'user', content: 'Hello' }],
+      response_format: {
+        type: 'json_schema',
+        json_schema: {
+          schema: testSchemaWithOptional,
+          // strict intentionally omitted
+          name: 'PersonResponse',
+        },
+      },
+    });
+  });
 });
 
 describe('doStream', () => {
